@@ -12,9 +12,8 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true,
-    // Disable email confirmation for faster signup
-    flowType: 'pkce'
-  }
+    flowType: 'pkce', // keep PKCE flow for security
+  },
 });
 
 export type UserRole = 'student' | 'admin';
@@ -73,43 +72,53 @@ export interface Notification {
   created_at: string;
 }
 
+// =======================
 // Auth helper functions
-export const createUserProfile = async (user: any, fullName: string, role: UserRole) => {
-  // First check if profile already exists
-  const { data: existingProfile } = await supabase
+// =======================
+
+export const createUserProfile = async (
+  user: { id: string; email: string },
+  fullName: string,
+  role: UserRole
+) => {
+  // ✅ use maybeSingle (avoids PGRST116 when no row exists)
+  const { data: existingProfile, error: selectError } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', user.id)
-    .single();
+    .maybeSingle();
+
+  if (selectError) return { data: null, error: selectError };
 
   if (existingProfile) {
-    // Profile already exists, return it
     return { data: existingProfile, error: null };
   }
 
-  // Create new profile
+  // ✅ insert or update profile
   const { data, error } = await supabase
     .from('profiles')
-    .upsert({
-      id: user.id,
-      email: user.email,
-      full_name: fullName,
-      role: role,
-    }, {
-      onConflict: 'id'
-    })
+    .upsert(
+      {
+        id: user.id,
+        email: user.email,
+        full_name: fullName,
+        role: role,
+      },
+      { onConflict: 'id' }
+    )
     .select()
-    .single();
+    .maybeSingle(); // safer than .single()
 
   return { data, error };
 };
 
 export const getUserProfile = async (userId: string) => {
+  // ✅ use maybeSingle instead of single
   const { data, error } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', userId)
-    .single();
+    .maybeSingle();
 
   return { data, error };
 };
