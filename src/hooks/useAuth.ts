@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, type Profile, createUserProfile, getUserProfile } from '../lib/supabase';
-import type { User, AuthError } from '@supabase/supabase-js';
+import type { User } from '@supabase/supabase-js';
 
 interface AuthState {
   user: User | null;
@@ -14,62 +14,52 @@ export function useAuth() {
     user: null,
     profile: null,
     loading: true,
-    error: null
+    error: null,
   });
 
   useEffect(() => {
     let mounted = true;
 
-    // Get initial session
     const getInitialSession = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
-        
+
         if (error) {
           console.error('Error getting session:', error);
-          if (mounted) {
-            setState(prev => ({ ...prev, error: error.message, loading: false }));
-          }
+          if (mounted) setState(prev => ({ ...prev, error: error.message, loading: false }));
           return;
         }
 
         if (session?.user && mounted) {
           const { data: profile, error: profileError } = await getUserProfile(session.user.id);
-          
+
           if (profileError) {
             console.error('Error fetching profile:', profileError);
-            if (mounted) {
-              setState(prev => ({ 
-                ...prev, 
-                user: session.user, 
-                profile: null, 
-                error: 'Profile not found', 
-                loading: false 
-              }));
-            }
-          } else if (mounted) {
+            setState(prev => ({
+              ...prev,
+              user: session.user,
+              profile: null,
+              error: 'Profile not found',
+              loading: false,
+            }));
+          } else {
             setState({
               user: session.user,
-              profile: profile,
+              profile,
               loading: false,
-              error: null
+              error: null,
             });
           }
-        } else if (mounted) {
-          setState({
-            user: null,
-            profile: null,
-            loading: false,
-            error: null
-          });
+        } else {
+          setState({ user: null, profile: null, loading: false, error: null });
         }
       } catch (err) {
         console.error('Unexpected error in getInitialSession:', err);
         if (mounted) {
-          setState(prev => ({ 
-            ...prev, 
-            error: 'Failed to initialize authentication', 
-            loading: false 
+          setState(prev => ({
+            ...prev,
+            error: 'Failed to initialize authentication',
+            loading: false,
           }));
         }
       }
@@ -77,67 +67,43 @@ export function useAuth() {
 
     getInitialSession();
 
-    // Listen for auth changes
+    // Auth state change listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log('Auth state changed:', event, session?.user?.id);
-        
+      async (_event, session) => {
         if (!mounted) return;
-
         try {
           if (session?.user) {
-            // User signed in - try to get profile, create if doesn't exist
             let { data: profile, error: profileError } = await getUserProfile(session.user.id);
-            
+
             if (profileError || !profile) {
-              console.log('Profile not found, attempting to create from user metadata');
-              
-              // Try to create profile from user metadata if available
+              console.log('Profile not found, creating one...');
               const userMetadata = session.user.user_metadata;
+
               if (userMetadata?.full_name && userMetadata?.role) {
-                const { data: newProfile, error: createError } = await createUserProfile(
+                const { data: newProfile } = await createUserProfile(
                   session.user,
                   userMetadata.full_name,
                   userMetadata.role
                 );
-                
-                if (!createError && newProfile) {
-                  profile = newProfile;
-                  profileError = null;
-                }
+                profile = newProfile ?? null;
               }
             }
-            
-            if (profile) {
-              setState({
-                user: session.user,
-                profile: profile,
-                loading: false,
-                error: null
-              });
-            } else {
-              setState({
-                user: session.user,
-                profile: null,
-                loading: false,
-                error: 'Profile not found. Please contact support.'
-              });
-            }
-          } else {
-            // User signed out
+
             setState({
-              user: null,
-              profile: null,
+              user: session.user,
+              profile,
               loading: false,
-              error: null
+              error: profile ? null : 'Profile not found. Please contact support.',
             });
+          } else {
+            setState({ user: null, profile: null, loading: false, error: null });
           }
         } catch (err) {
           console.error('Error in auth state change handler:', err);
           setState(prev => ({
             ...prev,
             error: 'Authentication error occurred',
-            loading: false
+            loading: false,
           }));
         }
       }
@@ -153,16 +119,11 @@ export function useAuth() {
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
 
-      // Sign up the user
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: undefined, // Disable email confirmation
-          data: {
-            full_name: fullName,
-            role: role,
-          },
+          data: { full_name: fullName, role },
         },
       });
 
@@ -177,32 +138,11 @@ export function useAuth() {
         return { data: null, error };
       }
 
-      // Create or get existing profile
-      try {
-        const { data: profileData, error: profileError } = await createUserProfile(
-          authData.user,
-          fullName,
-          role
-        );
-
-        if (profileError) {
-          console.error('Error creating profile:', profileError);
-          // If it's a duplicate key error, try to fetch the existing profile
-          if (profileError.code === '23505') {
-            const { data: existingProfile } = await getUserProfile(authData.user.id);
-            if (existingProfile) {
-              console.log('Using existing profile');
-            }
-          }
-        }
-      } catch (profileErr) {
-        console.error('Profile creation/fetch error:', profileErr);
-        // Continue anyway, profile will be handled in auth state change
-      }
+      // create profile in parallel
+      await createUserProfile(authData.user, fullName, role);
 
       setState(prev => ({ ...prev, loading: false }));
       return { data: authData, error: null };
-
     } catch (err) {
       const error = err as Error;
       console.error('Unexpected error in signUp:', error);
@@ -215,19 +155,14 @@ export function useAuth() {
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
 
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
         setState(prev => ({ ...prev, loading: false, error: error.message }));
         return { data: null, error };
       }
 
-      // Profile will be fetched in the auth state change handler
       return { data, error: null };
-
     } catch (err) {
       const error = err as Error;
       console.error('Unexpected error in signIn:', error);
@@ -247,9 +182,7 @@ export function useAuth() {
         return { error };
       }
 
-      // State will be updated in the auth state change handler
       return { error: null };
-
     } catch (err) {
       const error = err as Error;
       console.error('Unexpected error in signOut:', error);
@@ -258,9 +191,7 @@ export function useAuth() {
     }
   };
 
-  const clearError = () => {
-    setState(prev => ({ ...prev, error: null }));
-  };
+  const clearError = () => setState(prev => ({ ...prev, error: null }));
 
   return {
     user: state.user,
