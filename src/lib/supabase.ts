@@ -3,7 +3,18 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error('Missing Supabase environment variables');
+}
+
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,
+    flowType: 'pkce', // keep PKCE flow for security
+  },
+});
 
 export type UserRole = 'student' | 'admin';
 
@@ -34,6 +45,11 @@ export interface Application {
   cover_letter: string;
   status: 'pending' | 'shortlisted' | 'rejected' | 'interview_scheduled';
   created_at: string;
+  jobs?: {
+    title: string;
+    description: string;
+    application_deadline: string;
+  };
 }
 
 export interface Interview {
@@ -55,3 +71,54 @@ export interface Notification {
   read: boolean;
   created_at: string;
 }
+
+// =======================
+// Auth helper functions
+// =======================
+
+export const createUserProfile = async (
+  user: { id: string; email: string },
+  fullName: string,
+  role: UserRole
+) => {
+  // ✅ use maybeSingle (avoids PGRST116 when no row exists)
+  const { data: existingProfile, error: selectError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (selectError) return { data: null, error: selectError };
+
+  if (existingProfile) {
+    return { data: existingProfile, error: null };
+  }
+
+  // ✅ insert or update profile
+  const { data, error } = await supabase
+    .from('profiles')
+    .upsert(
+      {
+        id: user.id,
+        email: user.email,
+        full_name: fullName,
+        role: role,
+      },
+      { onConflict: 'id' }
+    )
+    .select()
+    .maybeSingle(); // safer than .single()
+
+  return { data, error };
+};
+
+export const getUserProfile = async (userId: string) => {
+  // ✅ use maybeSingle instead of single
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+
+  return { data, error };
+};
