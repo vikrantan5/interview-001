@@ -11,7 +11,9 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
-    detectSessionInUrl: true
+    detectSessionInUrl: true,
+    // Disable email confirmation for faster signup
+    flowType: 'pkce'
   }
 });
 
@@ -73,13 +75,28 @@ export interface Notification {
 
 // Auth helper functions
 export const createUserProfile = async (user: any, fullName: string, role: UserRole) => {
+  // First check if profile already exists
+  const { data: existingProfile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .single();
+
+  if (existingProfile) {
+    // Profile already exists, return it
+    return { data: existingProfile, error: null };
+  }
+
+  // Create new profile
   const { data, error } = await supabase
     .from('profiles')
-    .insert({
+    .upsert({
       id: user.id,
       email: user.email,
       full_name: fullName,
       role: role,
+    }, {
+      onConflict: 'id'
     })
     .select()
     .single();

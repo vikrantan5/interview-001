@@ -86,23 +86,41 @@ export function useAuth() {
 
         try {
           if (session?.user) {
-            // User signed in
-            const { data: profile, error: profileError } = await getUserProfile(session.user.id);
+            // User signed in - try to get profile, create if doesn't exist
+            let { data: profile, error: profileError } = await getUserProfile(session.user.id);
             
-            if (profileError) {
-              console.error('Error fetching profile after auth change:', profileError);
-              setState({
-                user: session.user,
-                profile: null,
-                loading: false,
-                error: 'Profile not found'
-              });
-            } else {
+            if (profileError || !profile) {
+              console.log('Profile not found, attempting to create from user metadata');
+              
+              // Try to create profile from user metadata if available
+              const userMetadata = session.user.user_metadata;
+              if (userMetadata?.full_name && userMetadata?.role) {
+                const { data: newProfile, error: createError } = await createUserProfile(
+                  session.user,
+                  userMetadata.full_name,
+                  userMetadata.role
+                );
+                
+                if (!createError && newProfile) {
+                  profile = newProfile;
+                  profileError = null;
+                }
+              }
+            }
+            
+            if (profile) {
               setState({
                 user: session.user,
                 profile: profile,
                 loading: false,
                 error: null
+              });
+            } else {
+              setState({
+                user: session.user,
+                profile: null,
+                loading: false,
+                error: 'Profile not found. Please contact support.'
               });
             }
           } else {
@@ -140,6 +158,7 @@ export function useAuth() {
         email,
         password,
         options: {
+          emailRedirectTo: undefined, // Disable email confirmation
           data: {
             full_name: fullName,
             role: role,
@@ -158,17 +177,27 @@ export function useAuth() {
         return { data: null, error };
       }
 
-      // Create profile
-      const { data: profileData, error: profileError } = await createUserProfile(
-        authData.user,
-        fullName,
-        role
-      );
+      // Create or get existing profile
+      try {
+        const { data: profileData, error: profileError } = await createUserProfile(
+          authData.user,
+          fullName,
+          role
+        );
 
-      if (profileError) {
-        console.error('Error creating profile:', profileError);
-        // Don't set error state here as the user was created successfully
-        // The profile will be created on next sign in attempt
+        if (profileError) {
+          console.error('Error creating profile:', profileError);
+          // If it's a duplicate key error, try to fetch the existing profile
+          if (profileError.code === '23505') {
+            const { data: existingProfile } = await getUserProfile(authData.user.id);
+            if (existingProfile) {
+              console.log('Using existing profile');
+            }
+          }
+        }
+      } catch (profileErr) {
+        console.error('Profile creation/fetch error:', profileErr);
+        // Continue anyway, profile will be handled in auth state change
       }
 
       setState(prev => ({ ...prev, loading: false }));

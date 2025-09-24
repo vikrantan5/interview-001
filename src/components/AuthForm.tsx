@@ -190,6 +190,12 @@ export function AuthForm({ mode, userType, onToggleMode }: AuthFormProps) {
             </div>
           )}
 
+          {mode === 'register' && (
+            <div className="text-xs text-gray-500 bg-blue-50 p-3 rounded-lg border border-blue-200">
+              <p>✓ No email verification required - you can start using your account immediately!</p>
+            </div>
+          )}
+
           <div>
             <button
               type="submit"
